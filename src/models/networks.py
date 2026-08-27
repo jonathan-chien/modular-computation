@@ -213,12 +213,21 @@ class GatedLayer(nn.Module):
 class NamedSequential(nn.Module):
     """ 
     """
-    def __init__(self, layers: dict[str, nn.Module], init_fns=None):
+    def __init__(
+        self, 
+        layers: dict[str, nn.Module], 
+        return_activations: list[str] | None = None, 
+        init_fns=None
+    ):
         """ 
         Order of layers is order of insertion of key-value pairs in dictionary.
         """
         super().__init__()
         self.layers = nn.ModuleDict(layers)
+        self._return_activations = (
+            set(return_activations) if return_activations is not None 
+            else set()
+        )
 
         if init_fns is not None:
             for fn in init_fns:
@@ -228,8 +237,8 @@ class NamedSequential(nn.Module):
         """ 
         """
         return_activations = (
-            set(return_activations) 
-            if return_activations is not None else set()
+            set(return_activations) if return_activations is not None 
+            else self._return_activations
         )
         activations = {}
         for name, layer in self.layers.items():
