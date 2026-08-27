@@ -1,243 +1,185 @@
-import copy
-import warnings
+from types import MappingProxyType
+from typing import Callable, Literal
 
 import torch
-from typing import Callable
 
-from models import utils as models_utils
-from models import networks
-from . import vmap 
-from . import utils as utils
+from sci_utils.ml import (
+    callbacks, 
+    environment, 
+    evaluation, 
+    hooks, 
+    logging,
+    loss, 
+    metrics, 
+    monitoring, 
+    rules
+)
 
 
-def squared_error_loss(prediction, target, model):
-    return torch.sum((target - prediction.reshape_as(target))**2)
-
-def mse_loss(prediction, target, model):
-    return torch.mean((target - prediction.reshape_as(target))**2)
-
-def mse_loss_readout_l2(prediction, target, model):
-    loss_1 = mse_loss(prediction, target, model)
-    loss_2 = torch.sum(model.layers['acc_drive'].weight**2)
-    return loss_1 + 2 * loss_2
+# Move to engine utils.
+DEFAULT_METRIC: metrics.Metric = MappingProxyType({'threshold_accuracy': (metrics.ThresholdAccuracy(threshold=0.))})
 
 def learn(
-    model, 
-    task, 
-    loss_fn, 
-    num_epochs, 
-    optim, 
-    svd_by_subpop, 
-    device, 
-    dynamic_hook_dict=None, 
-    save_alphas_and_betas=False,
-    save_state_dict=False, 
-    save_outputs=False,
-    print_update_every_n_epochs=1,
+    model: torch.nn.Module,
+    dataloaders: dict[Literal['train', 'val'], torch.utils.data.DataLoader],
+    loss_fn: loss.LossFn,
+    num_epochs: int,
+    backward_rule: rules.BackwardRule = rules.BackwardI(),
+    update_rule: rules.UpdateRule = rules.GradientSystemI(),
+    train_batch_callbacks: list[callbacks.BatchCallback] | None = None,
+    train_epoch_callbacks: list[callbacks.EpochCallback] | None = None,
+    val_batch_callbacks: list[callbacks.BatchCallback] | None = None,
+    val_epoch_callbacks: list[callbacks.EpochCallback] | None = None,
+    dynamic_hook_dict: hooks.DynamicHookDict | None = None,
+    print_every_n_epochs: int = 50,
 ):
-
-    # Could add validation for dynamic_hooks here.
-
-    task.domain = task.domain.to(device)
-    task.context_values = task.context_values.to(device)
-    task.target = task.target.to(device)
-    model.to(device)
+    """ 
+    """
     model.train()
-    if svd_by_subpop is not None:
-        svd_by_subpop = [items.to(device) for items in svd_by_subpop] 
-
-    has_subpopulations = isinstance(
-        model.layers['ofc'].gates.subpopulation_membership, 
-        networks.SubpopulationMembership
-    )
-
-    # Input layer size.
-    input_layer_size = model.layers['ofc'].linear.weight.shape[1]
-
-    # Get subpopulation sizes.
-    if has_subpopulations:
-        subpopulation_sizes = torch.sum(
-            model.layers['ofc'].gates.subpopulation_membership.membership, 
-            dim=0, 
-            dtype=torch.int32
-        ) # XXX Will fail if membership matrix is not Boolean, need to add Boolean check
-        num_subpops = len(subpopulation_sizes)
-
-        # Preallocate for projections onto modes.
-        if save_alphas_and_betas:
-            alphas = [
-                torch.zeros((num_epochs, subpop_size, input_layer_size))
-                for subpop_size in subpopulation_sizes
-            ]
-            betas = [
-                torch.zeros((num_epochs, model.layers['acc_drive'].weight.shape[0], subpop_size))
-                for subpop_size in subpopulation_sizes
-            ]
-        else:
-            alphas = []
-            betas = []
-
-        # Lengths of projections (is there an inner product here?)
-        a = [torch.zeros((num_epochs, input_layer_size)) for _ in subpopulation_sizes]
-        b = [torch.zeros((num_epochs, model.layers['acc_drive'].weight.shape[0])) for _ in subpopulation_sizes]
-    else:
-        alphas = []
-        betas = []
-        a = []
-        b = []
-
-    loss_by_epoch = torch.full((num_epochs,), torch.nan)
-    accuracy_by_epoch = torch.full((num_epochs,), torch.nan)
-
-    state_dicts = {}
-    outputs = {}
 
     for i_epoch in range(num_epochs):
-        # Update dynamic hooks objects.
-        if dynamic_hook_dict is not None:
-            dynamic_hook_dict.update(epoch_idx=i_epoch, batch_idx=0)
-
-        # Optionally save model state dict.
-        if save_state_dict:
-            state_dicts[i_epoch] = copy.deepcopy(model.state_dict())
-
-        # Compute loss and backpropagate.
-        if i_epoch % print_update_every_n_epochs == 0:
+        # Optionally print updates for this epoch.
+        print_this_epoch = i_epoch % print_every_n_epochs == 0
+        if print_this_epoch:
             print(f"Training for epoch {i_epoch}...")
-        optim.zero_grad()
-        output, _ = model(task.domain)
-        loss = loss_fn(output, task.target)
-        loss.backward()
-        optim.step()
 
-        # Compute accuracy.
-        accuracy = torch.sum(torch.eq(output.squeeze() > 0, task.target > 0))/task.__len__()
+        for i_batch, (x, y, batch_aux) in enumerate(dataloaders['train']):
+            if dynamic_hook_dict is not None:
+                dynamic_hook_dict.update(epoch_idx=i_epoch, batch_idx=i_batch)
 
-        # Optionally save output from current epoch.
-        if save_outputs:
-            outputs[i_epoch] = output.squeeze()
+            train_batch_env = environment.BatchEnvironment(
+                epoch_idx=i_epoch,
+                batch_idx=i_batch,
+                batch_size=x.shape[0],
+                x=x,
+                y=y
+            )
+            train_batch_env = evaluation.evaluate(model, train_batch_env, loss_fn)
+            params=dict(model.named_parameters())
+            backward_rule(train_batch_env.loss, params=params)
+            update_rule(params)
 
-        # Print and store.
-        if i_epoch % print_update_every_n_epochs == 0:
-            print(f"Current training loss: {loss}.")
-            print(f"Current training accuracy: {accuracy}.")
-        loss_by_epoch[i_epoch] = loss.item()
-        accuracy_by_epoch[i_epoch] = accuracy.item()
+            if train_batch_callbacks is not None:
+                for callback in train_batch_callbacks:
+                    callback(train_batch_env)
 
-        # Compute projections onto SVD modes.
-        if has_subpopulations:
-            for i_subpop in range(num_subpops):
-                alpha = torch.index_select(
-                    model.layers['ofc'].linear.weight, 
-                    dim=0,
-                    index=models_utils.get_subpopulation_ind(model, 'ofc', i_subpop)
-                ) @ svd_by_subpop[2][i_subpop, :, :].T
-                beta = svd_by_subpop[0][i_subpop, :, :] @ torch.index_select(
-                    model.layers['acc_drive'].weight,
-                    dim=1,
-                    index=models_utils.get_subpopulation_ind(model, 'ofc', i_subpop)
-                )
-                # alpha = model.layers['ofc'].linear.weight[get_subpopulation_ind(model, 'ofc', i_subpop), :] @ svd_by_subpop[i_subpop][2]
-                # beta = svd_by_subpop[i_subpop][0].T @ model.layers['acc_drive'].weight[:, get_subpopulation_ind(model, 'ofc', i_subpop)]
-                a[i_subpop][i_epoch] = torch.sqrt(torch.sum(alpha**2, dim=0)) # TODO: Need to think about how many modes there will be and how to store all of them.
-                b[i_subpop][i_epoch] = torch.sqrt(torch.sum(beta**2, dim=1))
-                if save_alphas_and_betas:
-                    alphas[i_subpop][i_epoch, :, :] = alpha
-                    betas[i_subpop][i_epoch, :, :] = beta
-    
-    if dynamic_hook_dict is not None:
-        dynamic_hook_dict.remove()
-    print("Done.")
-    
-    return {
-        'alpha': alphas, 
-        'betas': betas, 
-        'a': a, 
-        'b': b, 
-        'loss_by_epoch': loss_by_epoch, 
-        'accuracy_by_epoch': accuracy_by_epoch, 
-        'state_dicts': state_dicts, 
-        'outputs': outputs
-    }
+        if train_epoch_callbacks is not None:
+            for callback in train_epoch_callbacks:
+                try:
+                    callback(i_epoch)
+                except monitoring.StopTraining:
+                    return None
+            
+        # Evaluate on validation set.
+        for i_batch, (x, y, batch_aux) in enumerate(dataloaders['val']):
+            val_batch_env = environment.BatchEnvironment(
+                epoch_idx=i_epoch,
+                batch_idx=i_batch,
+                batch_size=x.shape[0],
+                x=x,
+                y=y
+            )
+            with evaluation.temporarily_eval(model):
+                val_batch_env = evaluation.evaluate(model, val_batch_env, loss_fn)
 
+            if val_batch_callbacks is not None:
+                for callback in val_batch_callbacks:
+                    callback(val_batch_env)
 
-def vmap_learn(
-    models_list,
-    task,
-    loss_fn,
-    num_epochs: int, 
-    lr: int =1e-3,
-    criteria: dict[str, Callable] = {'accuracy': utils.threshold_and_compute_accuracy},
-    device=None, 
-    clear_models_list_when_finished=True,
-    logger=None,
-    log_alphas_and_betas=False,
-    log_params=False, 
-    log_outputs=False,
-    print_update_every_n_epochs=1,
-    detach_per_epoch=True
+        if val_epoch_callbacks is not None:
+            for callback in val_epoch_callbacks:
+                try:
+                    callback(i_epoch)
+                except monitoring.StopTraining:
+                    return None
+
+        if print_this_epoch:
+            pass
+
+    return None
+
+def learn_legacy(
+    model: torch.nn.Module | list[torch.nn.Module],
+    x: torch.Tensor,
+    y: torch.Tensor,
+    loss_fn: Callable,
+    criteria: dict[str, Callable] = None,
+    num_epochs: int = 10,
+    lr: float = -1e3,
+    svd_by_subpop: torch.Tensor | None = None,
+    device: str | None = None,
+    print_every_n_epochs: int = 50,
+    logger: logging.Logger | None = None,
+    log_every_n: int = 1,
+    log_gates: str | bool = False,
+    noisy_input: torch.distributions.Distribution | None = None
 ):
-    models_list = [model.to(device) for model in models_list]
-    task.domain = task.domain.to(device)
-    task.target = task.target.to(device)
+    """ 
+    Legacy learn function from notebook gamma02 capable of training gated model
+    and storing gates. Will look to support training of gated models in main
+    learn function if relevant.
+    """
+    if device is not None:
+        model = model.to(device)
+        x = x.to(device)
+        y = y.to(device)
 
-    if logger is None and (log_alphas_and_betas or log_outputs or log_params):
-        warnings.warn(
-            f"One of log_alphas_and_betas {log_alphas_and_betas}, "
-            f"log_outputs {log_outputs}, or log_params {log_params} "
-            "is True, but logger is None, so none of these items will be logged."
-        )
-
-    learning = vmap.prepare_for_vmap(
-        models_list=models_list,
-        loss_fn=loss_fn,
-        prototype_model=None,
-        clear_models_list_when_finished=clear_models_list_when_finished
-    )
+    if logger is None:
+        logger = logging.Logger(log_name='default_logger', verbose_epoch=False)
 
     for i_epoch in range(num_epochs):
-        if i_epoch % print_update_every_n_epochs == 0:
-            print(f"Training for epoch {i_epoch} ...")
+        print_this_epoch = i_epoch % print_every_n_epochs == 0
+        if print_this_epoch:
+            print(f"Training for epoch {i_epoch}...")
 
-        (
-            models_grads, 
-            models_losses, 
-            aux
-        ) = vmap.vmap_compute_grads_losses_outputs(
-            learning['stateless_grad_and_value'],
-            learning['params'],
-            learning['buffers'],
-            task.domain,
-            task.target
-        )
+        # Forward and backward passes.
+        if noisy_input is not None:
+            x_ = x + torch.cat((torch.zeros(x.shape[0], 2, device=device), noisy_input.sample(x[:, 2:].shape)), dim=1)
+        else:
+            x_ = x
+        y_hat, activations = model(x_)
+        loss = loss_fn(y_hat, y, model)
+        loss.backward()
+        with torch.no_grad():
+            for p in model.parameters():
+                if p.grad is not None:
+                    p -= p.grad * lr
+                    p.grad = None
 
-        learning['params'] = vmap.update_params(
-            learning['params'], 
-            models_grads=models_grads,
-            lr=lr
-        )
+        if print_this_epoch:
+            print(f"Training loss for epoch {i_epoch}: {loss}.")
 
-        if criteria is not None:
-            performance = {
-                criterion_name: criterion(aux['y_hat'], task.target) # Should make sure these functions handle broadcasting
-                for criterion_name, criterion in criteria.items()
-            }
+        # Compute performance criteria.
+        performance = {}
+        for name, criterion in criteria.items():
+            performance[name] = criterion(y_hat, y)
+            if print_this_epoch:
+                print(f"{name.capitalize()} for epoch {i_epoch}: {performance[name]['accuracy']}.") # XXX: Hacky for meeting with Thibaud
 
-        # Could add functinality here for detaching.
-        if detach_per_epoch:
+        # Compute SVD stuff.
+        if svd_by_subpop is not None:
             pass
-            # Use recursive functionality to access leaf tensors and detach.
-            # performance = {
-            #     criterion_name : item.detach() 
-            #     for criterion_name, item in performance.items()
-            # }
 
-        if logger is not None:
-            epoch_log = {}
-            epoch_log['loss'] = models_losses
-            epoch_log['performance'] = performance if criteria is not None else None
+        # Log per epoch items.
+        if i_epoch % log_every_n == 0:
+            epoch_log = {
+                'loss': loss,
+                # 'performance': performance,
+                # 'activations': activations,
+                'accuracy': performance['accuracy'],
+                'readout_weights': model.layers['acc_drive'].weight.detach().cpu().clone(),
+                'gates': (
+                    model.layers[log_gates].gates.get_gate_pattern(x) if log_gates 
+                    else None
+                )
+            }
+            epoch_log.update(**performance['accuracy'])
+            epoch_log.update(**activations)
+            if svd_by_subpop is not None:
+                epoch_log.update()
             logger.log_epoch(epoch_idx=i_epoch, **epoch_log)
 
-    print("Done.")
-            
-    return learning
+    return logger
+
+
+
