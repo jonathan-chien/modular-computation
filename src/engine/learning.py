@@ -181,5 +181,3 @@ def learn_legacy(
 
     return logger
 
-
-
