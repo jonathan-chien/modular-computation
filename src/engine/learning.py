@@ -21,9 +21,10 @@ DEFAULT_METRIC: metrics.Metric = MappingProxyType({'threshold_accuracy': (metric
 
 def learn(
     model: torch.nn.Module,
-    dataloaders: dict[Literal['train', 'val'], torch.utils.data.DataLoader],
     loss_fn: loss.LossFn,
     num_epochs: int,
+    dataloader_train: torch.utils.data.DataLoader,
+    dataloader_val: torch.utils.data.DataLoader | None = None,
     backward_rule: rules.BackwardRule = rules.BackwardI(),
     update_rule: rules.UpdateRule = rules.GradientSystemI(),
     train_batch_callbacks: list[callbacks.BatchCallback] | None = None,
@@ -36,6 +37,7 @@ def learn(
     """ 
     """
     model.train()
+    dataloader_val = dataloader_val or []
 
     for i_epoch in range(num_epochs):
         # Optionally print updates for this epoch.
@@ -43,7 +45,8 @@ def learn(
         if print_this_epoch:
             print(f"Training for epoch {i_epoch}...")
 
-        for i_batch, (x, y, batch_aux) in enumerate(dataloaders['train']):
+        for i_batch, (x, y, batch_aux) in enumerate(dataloader_train):
+            # XXX: Hooks will probably fire again before being updated during validation pass.
             if dynamic_hook_dict is not None:
                 dynamic_hook_dict.update(epoch_idx=i_epoch, batch_idx=i_batch)
 
@@ -71,7 +74,7 @@ def learn(
                     return None
             
         # Evaluate on validation set.
-        for i_batch, (x, y, batch_aux) in enumerate(dataloaders['val']):
+        for i_batch, (x, y, batch_aux) in enumerate(dataloader_val):
             val_batch_env = environment.BatchEnvironment(
                 epoch_idx=i_epoch,
                 batch_idx=i_batch,
