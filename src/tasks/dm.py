@@ -25,7 +25,7 @@ class Stimulus:
     def __post_init__(self):
         """ 
         """
-        self.feature_names = self.features.keys()
+        self.feature_names = list(self.features.keys())
         cart_prod = list(itertools.product(*self.features.values()))
         cart_prod = [[torch.atleast_1d(tensor) for tensor in element] for element in cart_prod]
         self.combinations = [
@@ -125,7 +125,7 @@ class DecisionMaking(ABC, torch.utils.data.Dataset):
     ): 
         domain = torch.cat(
             [
-                torch.tensor(task_cond.concatenate()).unsqueeze(0) 
+                task_cond.concatenate().unsqueeze(0) 
                 for task_cond in valid_task_conds
             ], 
             dim=0
@@ -255,9 +255,9 @@ class ContextDependentAnalogue2AFC(DecisionMaking):
             task_cond.get(stimulus='option_1', feature='shape')
             - task_cond.get(stimulus='option_2', feature='shape')
         )
-        if torch.all(task_cond.get(stimulus='context', feature='') == torch.tensor([1, 0])):
+        if torch.all(task_cond.get(stimulus='context', feature='') == torch.tensor([1, 0], device=color_diff.device)):
             relevant_diff, irrelevant_diff = color_diff, shape_diff
-        elif torch.all(task_cond.get(stimulus='context', feature='') == torch.tensor([0, 1])):
+        elif torch.all(task_cond.get(stimulus='context', feature='') == torch.tensor([0, 1], device=shape_diff.device)):
             relevant_diff, irrelevant_diff = shape_diff, color_diff
         else:
             raise ValueError(
