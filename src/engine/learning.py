@@ -27,6 +27,7 @@ def learn(
     dataloader_val: torch.utils.data.DataLoader | None = None,
     backward_rule: rules.BackwardRule = rules.BackwardI(),
     update_rule: rules.UpdateRule = rules.GradientSystemI(),
+    device: str | None = None,
     train_batch_callbacks: list[callbacks.BatchCallback] | None = None,
     train_epoch_callbacks: list[callbacks.EpochCallback] | None = None,
     val_batch_callbacks: list[callbacks.BatchCallback] | None = None,
@@ -49,6 +50,9 @@ def learn(
             # XXX: Hooks will probably fire again before being updated during validation pass.
             if dynamic_hook_dict is not None:
                 dynamic_hook_dict.update(epoch_idx=i_epoch, batch_idx=i_batch)
+
+            x = x.to(device) if device is not None else x
+            y = y.to(device) if device is not None else y
 
             train_batch_env = environment.BatchEnvironment(
                 epoch_idx=i_epoch,
