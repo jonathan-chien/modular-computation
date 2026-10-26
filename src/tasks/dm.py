@@ -135,15 +135,15 @@ class DecisionMaking(ABC, torch.utils.data.Dataset):
         return domain
 
     def compute_dv(self, valid_task_conds: list[TaskCondition]):
-            dv_valid_task_conds = []
-            for task_cond in valid_task_conds:
-                # Compute decision variable and auxiliary data for current task condition.
-                task_cond.compute_dv(self.dv_function)
-    
-                # Append to growing list that will be converted into tensor and used as "target" during training.
-                dv_valid_task_conds.append(task_cond.dv)
-    
-            return torch.cat(dv_valid_task_conds)
+        dv_valid_task_conds = []
+        for task_cond in valid_task_conds:
+            # Compute decision variable and auxiliary data for current task condition.
+            task_cond.compute_dv(self.dv_function)
+
+            # Append to growing list that will be converted into tensor and used as "target" during training.
+            dv_valid_task_conds.append(task_cond.dv)
+
+        return torch.cat(dv_valid_task_conds)
 
     def is_valid_task_cond(self, task_cond):
         return (
@@ -162,7 +162,7 @@ class DecisionMaking(ABC, torch.utils.data.Dataset):
         return data, self.dv[idx], self.valid_task_conds[idx]
 
     @abstractmethod
-    def dv_function(self):
+    def dv_function(self, task_cond):
         """ 
         Should return tuple (dv: float, aux: dict[str, object]).
         """
