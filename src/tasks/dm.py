@@ -1,7 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 import itertools
-import re
 from typing import Callable, Sequence
 
 import torch
@@ -185,91 +184,6 @@ class DecisionMaking(ABC, torch.utils.data.Dataset):
         y_cat = torch.stack(y, dim=0)
         return x_cat, y_cat, valid_task_conds
 
-            
-# class ContextDependentAnalogue2AFC(DecisionMaking):
-#     def __init__(
-#             self,
-#             stimuli: list[Stimulus], # Inputs must be analogue representation of value
-#             valid_task_cond_function: Callable | None = (
-#                 lambda task_cond: ContextDependentAnalogue2AFC.dv_function(task_cond)[0] != 0
-#             ),
-#             zscore_domain: bool = False,
-#             transform=None,
-#         ):
-#         super().__init__(
-#             stimuli=stimuli, 
-#             valid_task_cond_function=valid_task_cond_function,
-#             zscore_domain=zscore_domain,
-#             transform=transform
-#         )
-
-#     def _zscore_domain(self, domain):
-#             """ 
-#             """
-#             domain[:, 2:] = (domain[:, 2:] - torch.mean(domain[:, 2:])) / torch.std(domain[:, 2:])
-#             return domain
-
-#     def get_condition_ind(self, trial_type: str):
-#         """ 
-#         """
-#         if trial_type in ['congruent', 'incongruent']:
-#             if trial_type == 'congruent':
-#                 def comparison(a): return a > 0
-#             elif trial_type == 'incongruent':
-#                 def comparison(a): return a < 0
-#             else:
-#                 raise ValueError(
-#                     f"Unexpected value '{trial_type}' for trial_type. "
-#                     "Must be 'congruent' or 'incongruent'."
-#                 )
-
-#             return [
-#                 task_cond.condition_idx for task_cond in self.valid_task_conds 
-#                 if comparison(
-#                     task_cond.aux['relevant_difference'] * task_cond.aux['irrelevant_difference'] 
-#                 )
-#             ]
-#         elif trial_type[:-1] == 'context:':
-#             try:
-#                 context = tuple(int(s) for s in re.sub('context:', '', trial_type))
-#             except ValueError as e:
-#                 raise ValueError(
-#                     "Tried to call remaining string following 'context:' in " 
-#                     f"`trial_type` to tuple of ints and got a ValueError: {e}. "
-#                     "Ensure final element is string representation of a sequence of integers."
-#                 )
-#             return [
-#                 task_cond.condition_idx for task_cond in self.valid_task_conds
-#                 if task_cond.get(stimulus_name='context', feature_name='') == context
-#             ]
-
-#     @staticmethod
-#     def dv_function(task_cond: TaskCondition):
-#         """ 
-#         """
-#         color_diff = (
-#             task_cond.get(stimulus='option_1', feature='color')
-#             - task_cond.get(stimulus='option_2', feature='color')
-#         )
-#         shape_diff = (
-#             task_cond.get(stimulus='option_1', feature='shape')
-#             - task_cond.get(stimulus='option_2', feature='shape')
-#         )
-#         if torch.all(task_cond.get(stimulus='context', feature='') == torch.tensor([1, 0], device=color_diff.device)):
-#             relevant_diff, irrelevant_diff = color_diff, shape_diff
-#         elif torch.all(task_cond.get(stimulus='context', feature='') == torch.tensor([0, 1], device=shape_diff.device)):
-#             relevant_diff, irrelevant_diff = shape_diff, color_diff
-#         else:
-#             raise ValueError(
-#                 "Unexpected value of " 
-#                 f"{task_cond.get(stimulus='context', feature='')} " 
-#                 "for choice item 0."
-#             )
-
-#         dv = relevant_diff
-#         aux = {'relevant_diff': relevant_diff, 'irrelevant_diff': irrelevant_diff}
-#         return dv, aux
-        
 
 class ContextPermTransform:
     """
