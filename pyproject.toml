@@ -15,6 +15,7 @@ dependencies = [
     "matplotlib>=3.10.8",
     "numpy>=2.4.3",
     "pandas>=3.0.1",
+    "sci-analysis",
     "sci-utils",
     "scipy>=1.17.1",
     "torch>=2.11.0",
@@ -25,3 +26,4 @@ where = ["src"]
 
 [tool.uv.sources]
 sci-utils = { path = "../sci-utils", editable = true }
+sci-analysis = { path = "../sci-analysis", editable = true }
